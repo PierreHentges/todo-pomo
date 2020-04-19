@@ -1,14 +1,21 @@
 """
-Reads in todo.txt file, generates a "today's To-dos" list, then runs Pomodoros
-to iteratively move these to a "Done" list, before finally updating the
+Reads in todo.txt file, generates list of To-Do objects, then runs these as
+cycles of Pomodoros (25 or 50 minutes), before finally updating the
 todo.txt file to take account of completed To-Dos and some metrics. A log is
-also kept of all pomodoros and breaks.
+also kept of all pomodoros and breaks for analysis.
+
+list_of_todos: contains all To-Dos, whatever their state, from todo.txt
+todays_list: subset of list_of_todos which can be run as Pomodoros, from where
+             they are moved to done_list when completed
+priority : typical is A, B, etc ; F: future - To-Dos you haven't started working
+            on but want to be associated with a projects ;
+            I: important ; U: urgent ; R: for routine stuff (daily or weekly)
+todopomo_log.txt: sequential log of all Pomodoros and breaks
 
 future improvements:
 - display analysis and stats, ways of visualising progress
-- make into flask webapp that can be run on NAS
-- basic todo.txt editing
-
+- make into flask app that can be run on NAS
+- improve grouping by projects for feedback and visualisation
 """
 import todotxtio as tdt
 import pomodoro as pmd
@@ -27,11 +34,11 @@ else:
     has_qt = True
 
 #declare filenames used
-#TODO_TXT = 'todo.txt'            #the main todo.txt file, created elsewhere
-TODO_TXT = 'test_todo.txt'
-TODO_TXT_TMP = 'test_todo_txt.tmp'#to save changes to To-Dos
-#LOG_FILE = 'todopomo_log.txt'    #to record pomodoros and breaks for analysis
-LOG_FILE = 'test_todopomo_log.txt'
+TODO_TXT = 'todo.txt'            #the main todo.txt file, created elsewhere
+#TODO_TXT = 'test_todo.txt'
+TODO_TXT_TMP = 'todo_txt.tmp'#to save changes to To-Dos
+LOG_FILE = 'todopomo_log.txt'    #to record pomodoros and breaks for analysis
+#LOG_FILE = 'test_todopomo_log.txt'
 
 def todo_id(todo_list):
     """
@@ -46,24 +53,25 @@ def todo_id(todo_list):
         tagged_list.append(todo)
     return tagged_list
 
-def create_update_todo():
-    print('not implemented yet')
-
 def make_todays_list(list1, list2=[]):
     """
     Makes (or updates) a list of To-dos (typically todays_list) by removing
     (or, if a second list is provided, adding) To-do objects
+    list1 : the list to be modified
+    list2 : if given, the list from which items will be taken
     returns:  new/updated list
     """
     q_remove = "To remove any To-dos from this list, "
     q_add = "To add any To-dos to the main list, "
     q = 'please enter a comma-separated list of numbers.'
-    #print list1
+    #by default remove To_dos with priority F (ie future)
+    list1 = [todo for todo in list1 if todo.priority != 'F']
     if list2:
         print("Current Todos are:")
         print_list(list1)
         q = q_add + q
-        options = list2
+        #only options are the difference of the two lists
+        options = [todo for todo in list2 if todo not in list1]
     else:
         q = q_remove + q
         options = list1
@@ -84,8 +92,8 @@ def make_todays_list(list1, list2=[]):
                 print("You selected:{}".format(options[i]))
             break
         except KeyboardInterrupt:
-            ########### save file?????????????????????????????????????
-            sys.exit()
+            print("KeyboardInterrupt - Returning to menu.")
+            return list1
         except:
             print("Incorrect selection, please try again")
             continue
@@ -164,15 +172,15 @@ def sort_todo_list(todo_list):
                                      else (x.priority if x.priority else ''))
     todo_list.sort(key=lambda x:x.completed)
 
-def selection(todo_list, further_options='URSF', default_option='0'):
+def selection(todo_list, further_options='CRSF', default_option='0'):
     """
-    Choose which To-do to do next - or one of the alternative options
+    Choose which To-do to run next - or one of the alternative options
     options_list should be a string e.g. "UFRS"
     returns either a 'todotxtio.Todo' object or a string (further_options)
     """
 
     #all possible non-To-do menu options - more can be added in future
-    further_options_def = [("U", "Update Today's To-do list"),
+    further_options_def = [("C", "Change or update the To-do list"),
                           ("F","Finish for the day - leave"),
                           ("R" , "Re-Start for the day"),
                           ("S" , "Show stats")
@@ -193,7 +201,12 @@ def selection(todo_list, further_options='URSF', default_option='0'):
     print(80*'#')
 
     while True:
-        option_selected = input(q1).upper() or default_option
+        try:
+            option_selected = input(q1).upper() or default_option
+        except:
+            #will exit after saving list
+            print(" Exiting!")
+            return 'F'
         if option_selected in options_dict.keys():
             print("You selected:{}".format(options_dict[option_selected]))
             break
@@ -249,8 +262,8 @@ def pomo_settings(pomo_length,todo_endpoint):
 def run_pomo(todo, rest=5):
     """
     Run one (or a cycle of) pomodoros based on a To-do, followed by break.
-    Logs length of each pomodoro and break (todopomo_log.txt).
-    To exit before completing, Ctrl+C breaks loop.
+    Logs length of each completed pomodoro and break (todopomo_log.txt).
+    To exit before completing (pomo or break), Ctrl+C breaks loop.
     Returns: completion state, number of pomos completed,
     time worked (pomo_cycle_duration in seconds)
     """
@@ -263,7 +276,6 @@ def run_pomo(todo, rest=5):
         pomo_length, todo_endpoint = pomo_settings(0.1, todo_endpoint)
         pmd.display("Now working on :", todo)
         start = datetime.now()
-        #interrupted = pmd.tick(int(pomo_length) * 60, True)
         interrupted = tick(int(pomo_length) * 60)
         if interrupted:
             continue
@@ -286,10 +298,9 @@ def run_pomo(todo, rest=5):
         start = datetime.now()
         #interrupted = tick(rest * 60)
         interrupted = tick(2)
-        #interrupted = pmd.tick(1, True)
         stop = datetime.now()
         break_duration = (stop - start).seconds
-        #cap duration at 20% extra
+        #cap break duration at 20% extra
         if break_duration > 1.2 * pomo_length * 60:
             break_duration = 1.2 * pomo_length * 60
         write_pomo(start, stop, break_duration)
@@ -299,9 +310,6 @@ def run_pomo(todo, rest=5):
         if another.upper() == "N":
             pmd.display("Pomodoro cycle is complete, back to selection")
             break
-#    print(todo)
-#    print(completed.upper(), pomo_count, pomo_cycle_duration)
-#    print(completed.upper(), int(pomo_count), int(pomo_cycle_duration))
     return completed.upper(), int(pomo_count), int(pomo_cycle_duration)
 
 def feedback(pomo_done=0,time_today=0,done_list=[],todays_list=[]):
@@ -334,14 +342,121 @@ def update_todo(todo,completed, pomo_count, pomo_cycle_duration):
     the latter as custom tags
     '''
     if completed == 'Y':
-        #update completion status by adding a completion date
+        #update completion status by adding a completion date, changes both
         todo.completion_date = datetime.today().date().isoformat()
     # create/update To-do tags: number of pomodoros, Total time as custom tags
     # NB - need to convert to str as tdt assumes that's data type
     if pomo_count and pomo_cycle_duration:
         todo.tags['Pmd'] = str(pomo_count + int(todo.tags.get('Pmd', 0)))
         todo.tags['Ttotal'] = str(pomo_cycle_duration + int(todo.tags.get('Ttotal', 0)))
-#    return todo
+
+def todo_list_menu_selection(list_of_todos, todays_list):
+    '''
+    Select various ways to update or edit the lists of To-Dos
+    '''
+
+    options = {"U" : "Update Today's To-do list",
+               "R" : "Remove To-Dos from Today's list",
+               "P" : "Change To-do priority",
+               "A" : "Add new To-do",
+               "E" : "Edit existing To-do",
+               "M" : "Go back to main menu"
+                  }
+
+    q1 = "What would you like to change? Please select an option:"
+    q2 = "Make your selection:"
+    while True:
+        print(80*'+' + '\n' + q1)
+        for i,o in options.items():
+            print("[{}] - {}".format(i,o))
+        print(80*'+')
+        try:
+            option_selected = input(q2).upper() or "M"
+        except:
+            print("returning to main menu")
+            option_selected = "M"
+        if option_selected in options.keys():
+            print("You selected:{}".format(options[option_selected]))
+            #break
+        else:
+            print("Incorrect selection, please try again")
+            continue
+        if option_selected == "U":
+            todays_list = make_todays_list(todays_list,list_of_todos)
+        elif option_selected == "R":
+            todays_list = make_todays_list(todays_list)
+        elif option_selected == "P":
+            list_of_todos = edit_todo(list_of_todos)
+        elif option_selected == "A":
+            list_of_todos,todays_list = add_new_todo(list_of_todos,todays_list)
+        elif option_selected == "E":
+            print('not implemented yet')
+        elif option_selected == "M":
+            break
+
+    #sort modified lists
+    sort_todo_list(list_of_todos)
+    sort_todo_list(todays_list)
+    #save modified list
+    tdt.to_file(TODO_TXT_TMP,list_of_todos)
+    print("Modified list saved!")
+    return list_of_todos, todays_list
+
+def add_new_todo(list_of_todos,todays_list):
+    '''
+    Creates a minimal To-Do (text, priority, projects), adds it to lists
+    Returns updated list_of_todos, todays_list
+    '''
+    q1 = "Enter the description of the new To-do:"
+    q2 = "Enter the priority:"
+    #q3 = "Enter the project(s) as a comma-separated list:"
+    q4 = "Should this be added to Today's list of To-Dos (Y/n) ?"
+    #nested set comprehension equivalent to :
+    #for todo in list_of_todos:
+    #    for project in todo.projects:
+    #         project
+    projects = {project for todo in list_of_todos for project in todo.projects}
+    q3 = "Enter xxxthe project(s) as a comma-separated list: \n"\
+         "(Existing projects are: " + ", ".join(projects) + ")"
+    t = input(q1)
+    pt = input(q2).upper()
+    pj = input(q3).replace(" ","").split(",")
+    add_to_today = input(q4) or "Y"
+    #instantiate To-Do
+    todo = tdt.Todo(text=t,priority=pt, projects=pj)
+    list_of_todos.append(todo)
+    if add_to_today.upper() == "Y":
+        todays_list.append(todo)
+    #add tdid to new To-Do
+    list_of_todos = todo_id(list_of_todos)
+    return list_of_todos, todays_list
+
+def edit_todo(list_of_todos):
+    '''
+    Change priority (or potentially other property) of existing todo
+    '''
+    priorities = 'ABCDEFIRU'
+    q1 = "Enter the number corresponding to the To-Do you want to change:"
+    q2 = "Enter the new priority (possible values:{})".format(list(priorities))
+    #list all to-dos available for selection
+    for i, option in enumerate(list_of_todos):
+        print("[{}] - {}".format(i,option))
+    #make todo selection
+    while True:
+        try:
+            todo = list_of_todos[int(input(q1))]
+            print("You selected:\n{}".format(todo))
+            p = input(q2).upper()
+            assert p in priorities
+            break
+        except KeyboardInterrupt:
+            print("returning to menu")
+            return list_of_todos
+        except:
+            print("Incorrect selection, please try again")
+            continue
+    todo.priority = p
+    return list_of_todos
 
 def tick(duration):
     try:
@@ -355,28 +470,33 @@ def tick(duration):
 
 
 def main():
-    #list_of_todos = tdt.from_file('todo.txt')
-    list_of_todos = tdt.from_file(TODO_TXT)
+    #check if tmp file remains, if so, load it
+    if os.path.isfile(TODO_TXT_TMP):
+        list_of_todos = tdt.from_file(TODO_TXT_TMP)
+        print('Loaded To-Dos from {} !'.format(TODO_TXT_TMP))
+    else:
+        #generate the main list of To-dos by reading in todo.txt
+        list_of_todos = tdt.from_file(TODO_TXT)
     #save timestamped backup of todo.txt content
-    backup_name = 'todo_txt_'+re.sub(r'\D+','', datetime.now().isoformat(timespec='seconds'))
-    tdt.to_file(backup_name, list_of_todos)
+    backup_name = 'todo_txt_' + re.sub(r'\D+','',
+                   datetime.now().isoformat(timespec='seconds'))
+    #tdt.to_file(backup_name, list_of_todos)
+    if os.path.isfile(TODO_TXT):
+        os.rename(TODO_TXT,backup_name)
     #give IDs to all To-dos, sort list, save to todo_txt_tmp
     list_of_todos = todo_id(list_of_todos)
     sort_todo_list(list_of_todos)
     tdt.to_file(TODO_TXT_TMP,list_of_todos)
-    print_list(list_of_todos, completed='Y')
+#    print_list(list_of_todos, completed='Y')
     #define today's list of To-Dos from those that aren't completed
-#    todays_list = make_todays_list(tdt.search(list_of_todos,completed=False))
     todays_list = make_todays_list(tdt.search(list_of_todos,completed=False))
     #initialise variables keeping track of Pomos done, their number, time spent
     done_list, pomo_done, time_today = [], 0, 0
-    #loop for moving To-dos from today's list to done list by doing them in Pomodoro
+    #loop for moving To-dos from today's list to done list by doing them
     while True:
-        #select next To-Do or a further option
-##        todo_selected, pomo_length, todo_endpoint = selection(todays_list)
-        option_selected = selection(todays_list, "UFRS", default_option='0')
-        if option_selected == 'U':
-            todays_list = make_todays_list(todays_list,list_of_todos)
+        option_selected = selection(todays_list, "CRSF", default_option='0')
+        if option_selected == 'C':
+            list_of_todos, todays_list = todo_list_menu_selection(list_of_todos, todays_list)
             continue
         elif option_selected == 'F':
             print("That's it for today!")
@@ -393,39 +513,36 @@ def main():
             print("not yet implemented")
             continue
 #        else: #has to be a To-do
-        completed, pomo_count, pomo_cycle_duration = run_pomo(option_selected)
-            #print("nned to implement new run_pomo")
-            #continue
+        try:
+            completed, pomo_count, pomo_cycle_duration = run_pomo(option_selected)
+        except:
+            print('\n',80*'$'+'\n '+40*'#~')
+            print(25*' '+'Pomo run was interrupted !\n' + 40*'#~','\n',80*'$')
+            continue
         #run pomodoro and keep track of metrics
-        #completed, count, time = run_pomo(todays_list[todo_selected], pomo_length, todo_endpoint)
         pomo_done += pomo_count
         time_today += pomo_cycle_duration
         #update the to-do that's going through a pomodoro cycle
-#        option_selected = update_todo(option_selected, completed, pomo_count, pomo_cycle_duration)
         update_todo(option_selected, completed, pomo_count, pomo_cycle_duration)
         print('checking:', option_selected)
-        #update the todo.txt file
-#        tdt.to_file('todo.txt',list_of_todos)
-        #tdt.to_file(TODO_TXT,list_of_todos)
+        #update the temprary todo.txt file
         tdt.to_file(TODO_TXT_TMP, list_of_todos)
         feedback(pomo_done,time_today,done_list,todays_list)
-#        print(80*'#')
         if completed == "Y":
             print("You just finished:\n {} \n Well done!".format(option_selected))
-            #done_list.append(todays_list.pop(option_selected))
             done_list.append(option_selected)
             todays_list.remove(option_selected)
         feedback(pomo_done,time_today,done_list,todays_list)
     #sort full list, overwrite the temporary todo.txt file
-#    print(list_of_todos)
-#    list_of_todos.sort(key = lambda x: x.tags['tdid'])
-#    list_of_todos.sort(key = lambda x: x.completed)
     sort_todo_list(list_of_todos)
-#    tdt.to_file('todo_txt_tmp',list_of_todos)
-#    print(list_of_todos)
-    #save final list:
-#    tdt.to_file('todo.txt',list_of_todos)
+    #save final list, overwriting the original
     tdt.to_file(TODO_TXT,list_of_todos)
+    if os.path.isfile(TODO_TXT):
+        print("saved current To-Dos to {}.".format(TODO_TXT))
+    #remove tmp file - otherwise it will be loaded next time
+    if os.path.isfile(TODO_TXT_TMP):
+        os.remove(TODO_TXT_TMP)
+        print("removed {}.".format(TODO_TXT_TMP))
 
 
 if __name__ == "__main__":
